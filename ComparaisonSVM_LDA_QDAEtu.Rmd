@@ -1,0 +1,251 @@
+---
+title: "Comparaison SVM LDA QDA"
+output:
+ html_document: 
+   toc: yes
+   toc_float: yes
+   number_section: yes
+   theme: cosmo
+   highlight: haddock
+   number_sections: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+# Importation de la base de données et description
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE,
+                      fig.height = 5, fig.width = 5)
+library(knitr)
+library(kableExtra)
+```
+
+```{r, echo=F}
+options(
+tikzSanitizeCharacters = c('%','}','{','^','_','&','~',"é","É","è","È","à","À"),
+tikzReplacementCharacters = c('\\%','\\}','\\{','\\^{}','\\_{}',
+'\\&','\\char`\\~',"\\'e","\\'E","\\`e","\\`E","\\`a","\\`A")
+)
+```
+
+On transforme les variables `character` en factor et on retire les lignes possédant des données manquantes. 
+
+
+```{r}
+library(tidyverse)
+data <- read_csv("data/Heart.csv")
+data<- data %>% mutate(AHD=factor(AHD),
+                     Sex=as.logical(Sex),
+                     ChestPain=factor(ChestPain),
+                     Fbs=as.logical(Fbs),
+                     RestECG=factor(RestECG),
+                     ExAng=factor(ExAng),
+                     Slope=factor(Slope,ordered=T,levels=c(1,2,3)),
+                     Thal=factor(Thal))%>%
+  drop_na()
+data<-data[,-1]
+```
+Description of attributes:
+
+- Sex: 1 = male; 0 = female
+- ChestPain *Douleurs Thoracique*
+- Restbps: resting blood pressure (in mm Hg on admission to the hospital) *Tension artérielle au repos*
+- Chol: serum cholestoral in mg/dl *taux de cholestérol sérique*
+- Fbs: (fasting blood sugar > 120 mg/dl) (1 = true; 0 = false) *glycémie à jeun*
+- RestECG: resting electrocardiographic results *Résultats de l'électrocardiogramme au repos*
+  - Value 0: normal
+  - Value 1: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of > 0.05 mV)
+  - Value 2: showing probable or definite left ventricular hypertrophy by Estes' criteria
+- MaxHR = maximum heart rate *fréquence cardiaque maximale*
+- ExAng: exercise induced angina (1 = yes; 0 = no) *angine de poitrine du à l'exercice*
+- Oldpeak = ST depression induced by exercise relative to rest *Dépression du segment ST induite entre exercice et retour au repos (electrocardiogramme)*
+- Slope: the slope of the peak exercise ST segment *pente...*
+  - Value 1: upsloping
+  - Value 2: flat
+  - Value 3: downsloping
+- Ca:  number of major vessels (0-3) colored by flourosopy
+- Thal: the heart status as retrieved from Thallium test
+  - 3 = normal;
+  - 6 = fixed defect; 
+  - 7 = reversable defect
+
+
+# e1071 et MASS
+
+1. Constitution des échantillons **train/test**
+```{r}
+N <- nrow(data)
+set.seed(1)
+train <- sample(1:N, size = round(0.66*N))
+
+```
+
+2. Effectuer les modèles de **lda** et **qda**
+
+```{r effectuer_qda_lda}
+library(e1071)
+library(MASS)
+
+lda.fit <- lda(AHD~., data = data, subset = train)
+qda.fit <- qda(AHD~., data= data, subset = train)
+```
+
+ - Construire la matrice de confusion avec les données test.
+ 
+```{r matrice_confusion_lda}
+res.lda <- predict(lda.fit, newdata = data[-train,])
+
+Realite <- data$AHD[-train]
+Prediction <- res.lda$class
+
+MC <- table(Realite, Prediction) |>
+          addmargins(margin = 1) |>
+          proportions(margin = 1) |> 
+          addmargins(margin = 2) |>
+          round(3)
+
+kable(MC, caption = "Matrice de confusion") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+ 
+```{r matrice_confusion_qda}
+res.qda <- predict(qda.fit, newdata = data[-train,])
+
+Realite <- data$AHD[-train]
+Prediction <- res.qda$class
+
+MC <- table(Realite, Prediction) |>
+          addmargins(margin = 1) |>
+          proportions(margin = 1) |> 
+          addmargins(margin = 2) |>
+          round(3)
+
+kable(MC, caption = "Matrice de confusion") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+ 
+ - Construire la courbe ROC.
+ 
+```{r ROC_lda}
+library(pROC)
+roclda <- roc(data$AHD[-train], res.lda$posterior[,1])
+rocqda <- roc(data$AHD[-train], res.qda$posterior[,1])
+
+ggroc(list(lda = roclda, rocqda = rocqda)) +
+  ggtitle("Courbes Roc LDA/QDA")
+
+```
+ 
+3. Effectuer un **svm linéraire** en optimisant avec le paramètre **cost**. Comparer.
+
+```{r}
+set.seed(1234)
+tune.out <- tune(svm, AHD~.,
+                 data = data[train,],
+                 kernel = "linear",
+                 ranges = list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+
+bestmodel <- tune.out$best.model
+
+res.svmlin <- predict(bestmodel, data[-train,], decision.values = T)
+
+
+table(Realite = data$AHD[-train], Prediction = res.svmlin) |> 
+  addmargins(margin = 1) |> proportions(margin = 1) |> 
+  addmargins(margin = 2) |> round(3)
+
+```
+
+Traçons la courbe ROC, il faut d'abord récuperer les vlauers qui permettent de classer l'individu : 
+
+```{r}
+predTest <- attributes(res.svmlin)$decision.values
+rocsvmlin <- roc(data$AHD[-train], predTest[,1])
+
+
+ggroc(list(lda = roclda, rocqda = rocqda, svmlin = rocsvmlin)) +
+  ggtitle("Courbes Roc LDA/QDA/SVM")
+```
+
+4. Effectuer un **svm radial** en optimisant les paramètres **cost** et **gamma**
+
+```{r}
+set.seed(1234)
+tune.rad <- tune(svm, AHD~.,
+                 data = data[train,],
+                 kernel = "radial",
+                 ranges = list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100),
+                               gamma = c(0.1, 0.25, 0.5, 1)))
+
+bestrad <- tune.rad$best.model
+
+res.svmrad <- predict(bestrad, data[-train,], decision.values = T)
+
+
+table(Realite = data$AHD[-train], Prediction = res.rad) |> 
+  addmargins(margin = 1) |> proportions(margin = 1) |> 
+  addmargins(margin = 2) |> round(3)
+```
+
+```{r}
+predTest <- attributes(res.svmrad)$decision.values
+rocsvmrad <- roc(data$AHD[-train], predTest[,1])
+
+
+ggroc(list(lda = roclda, rocqda = rocqda, svmlin = rocsvmlin, svmrad = rocsvmrad)) +
+  ggtitle("Courbes Roc LDA/QDA/SVM")
+```
+
+# Tidyverse et tidymodels
+
+On transforme les variables `character` en factor et on retire les lignes possédant des données manquantes. 
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+dat<-read_csv("data/Heart.csv")
+dat<- dat %>% mutate(AHD=factor(AHD),
+                     Sex=as.logical(Sex),
+                     ChestPain=factor(ChestPain),
+                     Fbs=as.logical(Fbs),
+                     RestECG=factor(RestECG),
+                     ExAng=factor(ExAng),
+                     Slope=factor(Slope,ordered=T,levels=c(1,2,3)),
+                     Thal=factor(Thal))%>%
+  drop_na()
+dat<-dat[,-1]
+```
+
+
+
+1. Construire l'échantillonnage **Train/Test** (proportion de 0.75), avec la commande `initial_split` en respectant la proportion de **AHD** dans chaque échantillon.
+
+```{r}
+split <- intial_split(data = dat,
+                      prop = 0.66,
+                      strata = AHD)
+
+dat_train <- training(split)
+dat_test <- testing(split)
+```
+
+2. Définir les différents modèles de prediction en précisant qu'ils sont en mode classification, leur "moteur", et leur paramètres à optimiser.
+ - **lda**, **qda** MASS
+ - **knn** kknn
+ - **svm linéaire**, **svm radial** kernlab
+ 
+```{r}
+library(discim)
+```
+ 
+3. Définir la formule du modèle, et construire les `workflow`
+4. Définir les échantillons de validation croisée 
+5. Pour chaque modèle avec paramètres :
+ - Construire la _grille_ pour l'optimisation des paramètres.
+ - Déterminer le (ou les) paramètre(s) pour la métrique **AUC**.
+ - Finaliser le `workflow`
+6. Comparer l'ensemble des modèles en superposant les courbes **roc**.
+
+
