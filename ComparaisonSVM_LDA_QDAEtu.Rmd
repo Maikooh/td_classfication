@@ -223,7 +223,7 @@ dat<-dat[,-1]
 1. Construire l'échantillonnage **Train/Test** (proportion de 0.75), avec la commande `initial_split` en respectant la proportion de **AHD** dans chaque échantillon.
 
 ```{r}
-split <- intial_split(data = dat,
+split <- initial_split(data = dat,
                       prop = 0.66,
                       strata = AHD)
 
@@ -237,14 +237,98 @@ dat_test <- testing(split)
  - **svm linéaire**, **svm radial** kernlab
  
 ```{r}
-library(discim)
+library(discrim)
+lda_mod <- discrim_linear() |>
+  set_mode("classification") |>
+  set_engine("MASS")
+
+qda_mod <- discrim_quad() |>
+  set_mode("classification") |>
+  set_engine("MASS")
+
+
+knn_mod <- nearest_neighbor() |> 
+  set_mode("classification") |> 
+  set_engine("kknn")
+
+svm_linear_mod <- svm_linear() |> 
+  set_mode("classification") |> 
+  set_engine("kernlab")
+
+
+svm_rad_mod <- svm_rbf() |> 
+  set_mode("classification") |> 
+  set_engine("kernlab")
 ```
  
 3. Définir la formule du modèle, et construire les `workflow`
+```{r}
+dat_rec <- dat_train |> recipe(AHD~.)
+```
+
+```{r}
+lda_wf <- workflow() |> 
+  add_model(lda_mod) |> 
+  add_recipe(dat_rec)
+
+qda_wf <- workflow() |> 
+  add_model(qda_mod) |> 
+  add_recipe(dat_rec)
+
+knn_wf <- workflow() |> 
+  add_model(knn_mod |> set_args(neighbors=tune())) |> 
+  add_recipe(dat_rec)
+
+svmlin_wf <- workflow() |> 
+  add_model(svm_linear_mod |> set_args(cost = tune())) |> 
+  add_recipe(dat_rec)
+
+svmrad_wf <- workflow() |> 
+  add_model(svm_rad_mod |> set_args(cost = tune(), rbf_sigma = 0.1)) |> 
+  add_recipe(dat_rec)
+```
+
+
 4. Définir les échantillons de validation croisée 
+
+```{r}
+dat_folds <- vfold_cv(dat_train, v = 5, strata = AHD)
+```
+
 5. Pour chaque modèle avec paramètres :
  - Construire la _grille_ pour l'optimisation des paramètres.
+Les modèles à paramètres sont **knn**, **svmlin** cost, ***svmrad** cost et rbf_sgma
+
+```{r}
+grid_knn <- knn_wf |>
+  extract_parameter_set_dials() |>
+  update(neighbors = neighbors(c(1, 10))) |>
+  grid_regular(levels = 9)
+
+```
+
+
+```{r}
+grid_svmlin <- svmlin_wf |> 
+  extract_parameter_set_dials() |>
+  update(cost = cost(c(-3, 3))) |>
+  grid_regular(levels = 7)
+```
+
+
+```{r}
+grid_svmrad <- svmrad_wf |> 
+  extract_parameter_set_dials() |>
+  update(cost = cost(c(-3, 3)), rbf_sigma = rbf_sigma(c(0.25, 0.75))) |>
+  grid_regular(levels = 7)
+```
+
  - Déterminer le (ou les) paramètre(s) pour la métrique **AUC**.
+ 
+```{r}
+
+```
+ 
  - Finaliser le `workflow`
 6. Comparer l'ensemble des modèles en superposant les courbes **roc**.
 
