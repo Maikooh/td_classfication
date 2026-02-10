@@ -284,7 +284,7 @@ svmlin_wf <- workflow() |>
   add_recipe(dat_rec)
 
 svmrad_wf <- workflow() |> 
-  add_model(svm_rad_mod |> set_args(cost = tune(), rbf_sigma = 0.1)) |> 
+  add_model(svm_rad_mod |> set_args(cost = tune(), rbf_sigma = tune())) |> 
   add_recipe(dat_rec)
 ```
 
@@ -326,9 +326,29 @@ grid_svmrad <- svmrad_wf |>
  - Déterminer le (ou les) paramètre(s) pour la métrique **AUC**.
  
 ```{r}
-
+knn_tune <- knn_wf |> tune_grid(resamples = dat_folds,
+                                grid = grid_knn,
+                                metrics = metric_set(roc_auc))
 ```
- 
+
+```{r}
+svmlin_tune <- svmlin_wf |> tune_grid(resamples = dat_folds,
+                                      grid = grid_svmlin,
+                                      metrics = metric_set(roc_auc))
+```
+
+
+```{r}
+svmrad_tune <- svmrad_wf |> tune_grid(resamples = dat_folds,
+                                      grid = grid_svmrad,
+                                      metrics = metric_set(roc_auc))
+```
+
+
+```{r}
+autoplot(knn_tune)
+```
+
  - Finaliser le `workflow`
 6. Comparer l'ensemble des modèles en superposant les courbes **roc**.
 
